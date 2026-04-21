@@ -1,0 +1,17 @@
+[project]
+name = "training-end2end"
+version = "0.1.0"
+description = "Main project entry, composed of three workspace, Detection, Segmentation and Quantification."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    
+]
+
+[tool.uv.workspace]
+members = [
+    "Segmentation",
+    "packages/Detection",
+    "packages/Quantification",
+    "packages/Segmentation",
+]

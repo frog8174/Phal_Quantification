@@ -1,0 +1,34 @@
+
+datasets/
+*.pt
+*.onnx
+*.engine
+runs/
+__pycache__/
+.venv/
+.python-version
+.ipynb_checkpoints/
+
+# --- IDE & Tools ---
+.vscode/
+.idea/
+.ruff_cache/
+scratch/
+.gemini/
+
+# --- OS Files ---
+.DS_Store
+Thumbs.db
+
+# --- Logs ---
+*.log
+.env
+
+# --- Project Specific Data & Model Outputs ---
+Datasets/
+datasets/
+Evaluation/
+Inference/
+training_result/
+trainging_results/
+models/
