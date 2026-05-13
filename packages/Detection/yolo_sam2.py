@@ -10,8 +10,8 @@ print(torch.cuda.device_count())
 # ===========================
 # 使用者需設定的參數
 # ===========================
-YOLO_WEIGHTS = "flower_detect/FD11/weights/best.pt"  # 你的 YOLO 權重（花朵偵測）
-TEST_DIR     = "datasets/test"                    # 測試圖片資料夾（裡面放多張 .jpg/.png）
+YOLO_WEIGHTS = "training_results/flower_detect/FD11/weights/best.pt"  # 你的 YOLO 權重（花朵偵測）
+TEST_DIR     = "processing"                    # 測試圖片資料夾（裡面放多張 .jpg/.png）
 IMG_SIZE     = 960                         # YOLO 推論解析度
 CONF_THRES   = 0.5                       # YOLO 信心門檻
 IOU_THRES    = 0.75                        # YOLO IoU 門檻
@@ -21,23 +21,39 @@ ALPHA_OVERLAY = 0.3                       # 總覽合成圖的透明度（0~1）
 # 你給的 SAM2 載入方式與裝置：
 device = 'cuda:3' if torch.cuda.is_available() else 'cpu'
 
-def is_near_border_xyxy(box, img_h, img_w, margin_ratio=0.02):
+def select_primary_flower(boxes_xyxy, img_h, img_w, alpha=1.0, beta=1.5):
     """
-    box: [x1, y1, x2, y2] (float)
-    margin_ratio: 距離邊界多少比例內視為「貼邊」(例如 0.02 = 2%)
+    Spatial Prominence-based Target Selection (SPTS).
+
+    Ranks each detected bounding box by a prominence score:
+        S_i = alpha * A_hat_i  -  beta * D_hat_i
+
+    where:
+        A_hat_i = box area / max(box areas)       (normalized area)
+        D_hat_i = dist(box_center, img_center) / img_diagonal  (normalized distance)
+
+    Returns the single box with the highest score, or None if input is empty.
     """
-    x1, y1, x2, y2 = box
+    if len(boxes_xyxy) == 0:
+        return None
 
-    margin_x = img_w * margin_ratio
-    margin_y = img_h * margin_ratio
+    img_cx, img_cy = img_w / 2.0, img_h / 2.0
+    img_diag = np.sqrt(img_w ** 2 + img_h ** 2)
 
-    # 只要有一邊太靠近就算貼邊
-    if x1 <= margin_x or y1 <= margin_y:
-        return True
-    if x2 >= img_w - margin_x or y2 >= img_h - margin_y:
-        return True
+    areas = (boxes_xyxy[:, 2] - boxes_xyxy[:, 0]) * (boxes_xyxy[:, 3] - boxes_xyxy[:, 1])
+    max_area = areas.max()
 
-    return False
+    box_cx = (boxes_xyxy[:, 0] + boxes_xyxy[:, 2]) / 2.0
+    box_cy = (boxes_xyxy[:, 1] + boxes_xyxy[:, 3]) / 2.0
+    dists = np.sqrt((box_cx - img_cx) ** 2 + (box_cy - img_cy) ** 2)
+
+    norm_area = areas / max_area
+    norm_dist = dists / img_diag
+
+    scores = alpha * norm_area - beta * norm_dist
+    best_idx = np.argmax(scores)
+
+    return boxes_xyxy[best_idx : best_idx + 1]  # (1, 4)
 
 # ===== SAM2 Predictor（依你提供的 from_pretrained 方式）=====
 class SAM2Predictor:
@@ -166,19 +182,15 @@ def main():
 
         boxes_xyxy = r.boxes.xyxy.cpu().numpy().astype(np.float32)  # (N,4)
 
-        # ✅ 先過濾：貼邊 / 太靠近邊界的 box 不處理
-        filtered_boxes = []
-        for box in boxes_xyxy:
-            if is_near_border_xyxy(box, img_h=h, img_w=w, margin_ratio=0.02):
-                # 貼邊的 box 直接略過
-                continue
-            filtered_boxes.append(box)
+        # ✅ Spatial Prominence-based Target Selection (SPTS)
+        #    選出面積最大且最靠近畫面中心的唯一主花
+        primary_box = select_primary_flower(boxes_xyxy, img_h=h, img_w=w)
 
-        filtered_boxes = np.array(filtered_boxes, dtype=np.float32)
-
-        if len(filtered_boxes) == 0:
-            print(f"[INFO] All boxes near border, skip {img_path.name}")
+        if primary_box is None:
+            print(f"[INFO] No primary flower identified, skip {img_path.name}")
             continue
+
+        filtered_boxes = primary_box
         
         # 5) SAM2：以 YOLO box 當 prompt 出 masks
         sam2.set_image(img_bgr)

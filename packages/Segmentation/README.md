@@ -19,6 +19,7 @@ Main scripts:
 
 - `fine-tuning.py`: train the segmentation model
 - `inference.py`: run prediction and generate visualizations
+- `extract_petal_mask.py`: extract class 6/7 petals as masks and RGBA cutouts
 - `evaluation.py`: compute metrics and confusion matrices
 
 ## Environment
@@ -101,6 +102,13 @@ Inference outputs:
 - colorized segmentation map
 - overlay visualization
 - saved 3-panel figure for each image
+
+Petal extraction outputs:
+
+- binary petal mask for class 6/7
+- class-preserving petal mask with values 0, 6, 7
+- black-background RGB petal image
+- RGBA petal cutout with transparent background
 
 Input folder:
 

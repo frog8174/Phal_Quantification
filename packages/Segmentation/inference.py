@@ -32,6 +32,7 @@ CONFIG = {
     "checkpoint_path": "./training_result/7classes_vitl_layer-1_LandR_v3_argumented/best.pth",
     # 測試與輸出路徑
     "test_image_dir": "./Inference/test_datasets",
+    "mask_output_dir": "./Inference/test_datasets_masks",
     "output_dir": "./Inference/7classes_vitl_layer-1_LandR_v3_argumented"
 }
 
@@ -117,6 +118,7 @@ def blend_images(orig_img, seg_rgb, alpha=0.4):
 # ==========================================
 def main():
     os.makedirs(CONFIG["output_dir"], exist_ok=True)
+    os.makedirs(CONFIG["mask_output_dir"], exist_ok=True)
     
     # A. 初始化模型
     # 注意：這裡使用 FineTuneSegmentation 而非 LinearProbeSegmentation
@@ -175,6 +177,10 @@ def main():
         blended = blend_images(original_pil, seg_rgb)
         
         # 5. 存檔與畫圖
+        # 單獨儲存純數值預測 Mask (0~7 類別)，檔名維持不變 (強制為 .png)，存入 mask_output_dir
+        mask_filename = f"{os.path.splitext(img_name)[0]}.png"
+        cv2.imwrite(os.path.join(CONFIG["mask_output_dir"], mask_filename), pred_mask_orig)
+
         fig, axes = plt.subplots(1, 3, figsize=(18, 6))
         axes[0].imshow(original_pil); axes[0].set_title("Original"); axes[0].axis('off')
         
