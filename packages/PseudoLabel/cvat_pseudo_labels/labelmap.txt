@@ -1,0 +1,9 @@
+# label:color_rgb:parts:actions
+Background:0,0,0::
+Column:255,255,0::
+Dorsal Sepal:0,255,0::
+Labellum:0,0,255::
+Lateral Sepal:0,255,255::
+Petal:255,0,0::
+Petal_L:255,0,255::
+Petal_R:255,165,0::

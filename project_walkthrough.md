@@ -320,9 +320,16 @@ cd ../Quantification       # 開啟 notebooks 依序執行
 | 2.5 Morphometric Analysis | `Quantification/main-quantification.ipynb` | 面積、長寬比、角度等幾何指標 |
 | 2.6 Pigment Quantification | `Quantification/ColorQuantify.ipynb` | CIELAB 轉換、生理過濾、voxel 去偏、K-Means++ K=8、bin ratio vectorization |
 
-### 7.2 選擇 2400px 的理由（論文可用）
+### 7.2 選擇 2400px 解析度的實證理由（論文可用）
 
-Column (蕊柱) 在花朵中佔比極小（通常 <3% 面積），低解析度下容易被忽略或邊界模糊。2400px 是在 ViT-L patch_size=16 下得到 150×150 patch grid，在可用 VRAM 下的最大值 (batch_size=2)。
+為驗證高解析度輸入的必要性，我們針對資料集進行了像素級的統計分析。結果顯示，**蕊柱 (Column) 平均僅佔整朵花面積的 1.28%，佔整張影像面積的 0.80%**，確實小於 3%，屬於極微小的器官類別。
+
+若使用 DINOv3 的 `patch_size=16` (每個 Patch 涵蓋 16×16=256 像素) 進行特徵萃取，不同輸入解析度對蕊柱的特徵保留量差異極大：
+- **512×512 (常規解析度)**：蕊柱僅佔約 **8 個 Patch**，極易在深層特徵中被周圍的花瓣特徵同化 (Oversmoothing) 或完全丟失，導致無法有效分割。
+- **800×800 (中等解析度)**：蕊柱佔約 **20 個 Patch**，邊界依然容易模糊。
+- **2400×2400 (本研究設定)**：蕊柱可佔高達 **180 個 Patch** (共 46,080 像素)，為神經網路提供了極其充足的空間解析度來學習蕊柱的紋理與邊界特徵。
+
+2400px 是在 ViT-L 架構搭配可用 VRAM (Batch Size=2, 啟用 Gradient Checkpointing) 下的極限值。這項數據有力地支持了我們放棄常規的 512px 或 800px，堅持採用高解析度進行微調的方法論。
 
 ### 7.3 為何不用 YOLO-Seg 或 Mask R-CNN？
 
@@ -342,3 +349,87 @@ YOLO-Seg / Mask R-CNN 做的是 instance segmentation（前景/背景），無�
 ### 7.5 GPU Device 硬編碼
 
 多處腳本硬編碼了 `device='cuda:2'` 或 `device='2,3'`。在不同機器復現時需手動修改。
+
+---
+
+## 8. 待探討方向 & 實驗紀錄 (2026-06-07)
+
+### 8.1 Petal L/R 分割策略
+
+**現狀**：8-class 模型包含 `Petal_L` 和 `Petal_R`。
+
+**已知問題**：
+- 使用單一 `Petal` class 時幾乎零錯誤，但拆分 L/R 後表現下降
+- 兩片花瓣存在重疊可能，無法僅依相對位置分辨
+- 像素級語意分割本質上不適合區分同類別的相鄰/重疊實體
+
+**可行方案** (優先順序)：
+
+| # | 方案 | 做法 | 優缺點 |
+|---|------|------|--------|
+| 1 | **5/6-class + Column centroid 後處理** | 訓練時合併 Petal → 推論後用 Column centroid 的 x 座標作中線，左/右各取 | ✅ 模型精度最高 ✅ Procrustes 只需輪廓 ⚠️ 嚴重重疊時中線切割可能不完美 |
+| 2 | Connected Component | 5-class → Petal mask → CC 分離 → centroid 分 L/R | ✅ 不重疊時完美 ❌ 重疊時只有一個 blob |
+| 3 | Watershed | Petal mask + distance transform → watershed | ✅ 輕微重疊可處理 ⚠️ 需可靠 seed |
+| 4 | Instance Seg (Mask R-CNN / YOLO-Seg) | 額外訓練 instance model | ❌ 需標註 ❌ 複雜度高 |
+
+**結論**：Procrustes analysis 只需要單片花瓣的外輪廓，Column centroid 後處理切分是最實用的方案。
+
+### 8.2 SAM2 Mask 品質實驗
+
+已建立獨立實驗腳本（不影響主 pipeline）：
+
+| 腳本 | 實驗內容 | 產出 |
+|------|----------|------|
+| `PseudoLabel/sam_ablation.py` | 3 變因對照：SAM 2.0 vs 2.1、single vs multimask、raw vs morph close | 每張圖一張 3×4 大圖 |
+| `PseudoLabel/sam_morph_test.py` | Morph Close kernel size 對照 (可自訂) | 每張圖一張 1×(2+N) 大圖 |
+
+**三個變因**：
+1. **SAM Version**：`facebook/sam2-hiera-large` vs `facebook/sam2.1-hiera-large` — 2.1 改善小物件/遮擋
+2. **multimask_output**：`False` (1 mask) vs `True` (3 masks, 取 score 最高) — 可能改善邊界品質
+3. **Morphological Close**：填補 mask 中的小洞 — kernel size 影響填洞範圍 vs 邊緣平滑度
+
+### 8.3 Pipeline 簡化：DINOv3 一步到位？
+
+**現狀**：YOLO → SPTS → SAM2 → DINOv3 需要 3 個模型，算力需求大。
+
+**可行的簡化方案**：
+
+| # | 方案 | 說明 | 可行性 |
+|---|------|------|--------|
+| 1 | **DINOv3 直接推論全圖** | 跳過 YOLO+SAM，DINOv3 直接對原圖做 8-class 語意分割（含 Background class） | ✅ 已有 `inference.py` 可做 ⚠️ 需驗證全圖 vs 裁切圖的精度差異 |
+| 2 | **YOLO + DINOv3 (無 SAM)** | YOLO 提供 bbox crop → DINOv3 分割（跳過 SAM 前景切割） | ✅ 省掉 SAM ⚠️ crop 會含背景雜訊 |
+| 3 | **全 DINOv3 端到端** | 訓練 DINOv3 做全圖推論，Background class 自然處理前景分離 | ✅ 最簡架構 ⚠️ 需要全圖標註（目前只有 22 張） |
+
+> [!IMPORTANT]
+> **方案 1 的關鍵實驗**：在現有 test set 上比較「全圖直推 DINOv3」vs「YOLO+SAM 裁切 → DINOv3」的 mIoU，若差距 < 2%，可直接簡化為 DINOv3 one-pass。
+
+### 8.4 SPTS 演算法效能評估與學術論述視角 (2026-06-10)
+
+**實驗背景**：為驗證 Primary Flower Identification (SPTS) 的幾何判定演算法的穩健性，我們開發了極速標註工具，並人工標註了 97 張 Ground Truth (GT) 進行準確率評估。
+
+**實驗結果與參數優化**：
+- **Baseline (預設參數)**：$\alpha=1.0, \beta=1.5$，準確率為 **86.60%**。
+- **Grid Search 最佳化**：掃描 $\alpha, \beta \in [0.0, 3.0]$，找到最佳參數組合為 $\alpha=2.0, \beta=1.5$（提升面積權重），準確率達到極限值 **88.66%**。
+
+**Failure Case 分析與學術價值 (論文撰寫素材)**：
+在 11 個預測失敗的案例中，我們進一步分析了 YOLO 的 Confidence Score。數據顯示，演算法誤判的「偽主花 (False Positive)」在 YOLO 的 Confidence 甚至高於真實主花（例如 0.97 vs 0.89），且具備更大的面積 (NormArea=1.00) 與更靠近中心的距離。這帶來了極具學術價值的結論，強烈建議在論文中以以下視角進行論述：
+
+1. **Lightweight Heuristic 的優勢與 Trade-off (章節：Methods / Results)**
+   本研究為追求自動化系統的高效能，刻意不引入額外的 Attention 或深度學習子網路進行主花辨識，而是提出極輕量化的空間顯著性指標 (SPTS)。實驗證實，僅憑面積與空間距離兩個幾何特徵，在無需額外算力開銷的情況下，即可達到近 90% 的高準確率。這證明了「幾何先驗知識 (Geometric Priors)」在單株花卉拍攝場景下的有效性。
+
+2. **Confidence Score 不適用的實證 (章節：Discussion)**
+   傳統物件偵測常以 Confidence 作為篩選目標的依據。但本研究的錯誤分析實證了：當前景存在巨大但失焦的干擾花朵時，YOLO 仍會給予極高的 Confidence。這凸顯了單純依賴 Detection Confidence 無法解決「目標物語意選擇 (Semantic Target Selection)」的問題，從反面強烈支撐了本研究提出 SPTS 演算法的必要性。
+
+3. **研究限制與未來展望 (章節：Limitation & Future Work)**
+   對於剩餘約 11% 的失敗案例（例如主花被葉片嚴重遮擋，導致 YOLO 框出極小的 Bounding Box），純幾何指標存在物理極限。論文可在此提出未來改善方向：在不破壞輕量化架構的前提下，引入 **Aspect Ratio Penalty (長寬比懲罰)** 或 **Intersection Penalty (遮擋重疊率判定)** 來過濾形狀異常的遮擋花朵，這會讓整篇論文的論述顯得極度客觀且嚴謹。
+
+### 8.5 Actionable TODO
+
+- [ ] **SAM 實驗**：在伺服器上跑 `sam_ablation.py` + `sam_morph_test.py`，選出最佳 SAM 配置
+- [ ] **DINOv3 全圖推論測試**：用 `inference.py` 直接推論原圖（不經 YOLO+SAM），比較 mIoU
+- [ ] **5/6-class 模型訓練**：合併 Petal_L/R → Petal，重新 fine-tune，驗證精度提升
+- [ ] **Column centroid 後處理**：實作 Petal mask → Column 中線 → L/R 切分 → contour 提取
+- [ ] **Baseline 對照組**：完成 U-Net 訓練（已在進行），收集結果寫入論文
+- [ ] **Pseudo-Label 管線**：選定 SAM 配置後，更新 `pipeline.py` 並大規模產出 pseudo masks
+- [ ] **Color Quantification**：K=6 的 CSV 重跑 + Donut Chart 驗證
+

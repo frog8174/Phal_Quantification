@@ -15,9 +15,9 @@ import pandas as pd  # 新增 pandas 用於 CSV 操作
 # ==========================================
 PROJECT_LOC = 'end2end_5classes'
 CONFIG = {
-    "device": "cuda:2" if torch.cuda.is_available() else "cpu",
-    "dataset_dir": f"./Datasets/dataset_cropped_19_5classes_LandR",
-    "save_dir": f"./training_result/7classes_vitl_layer-1_LandR_v3_argumented",
+    "device": "cuda:3" if torch.cuda.is_available() else "cpu",
+    "dataset_dir": f"./Datasets/v2_dataset_split",
+    "save_dir": f"./training_result/Finalexp_lastlayer_lr2e-4_v1",
     "model_name": "facebook/dinov3-vitl16-pretrain-lvd1689m",
     # "local_weights_path": "../models/pretrain/vit-l_97499.pth", # 你的本地權重路徑
     "local_weights_path": None,
@@ -26,14 +26,15 @@ CONFIG = {
     "num_classes": 8,
     "epochs": 200,    
     "batch_size": 2,  
-    "lr_head": 0.0004,  
+    "lr_head": 0.0002,  
     "lr_backbone": 0.000005, 
     "num_workers": 1,
-    "early_stopping_patience": 15,
+    "early_stopping_patience": 200,
     "early_stopping_min_delta": 5e-4,
     
-    "extract_layers": [-1], # len(feats)=32
-    "use_checkpointing": True
+    "extract_layers": [-1], # len(feats)=24
+    "use_checkpointing": True,
+    "resume": False # 是否從 last.pth 中斷接續訓練
 }
 
 os.makedirs(CONFIG["save_dir"], exist_ok=True)
@@ -232,10 +233,25 @@ def main():
 
     best_iou = 0.0
     no_improve_epochs = 0
+    start_epoch = 0
     early_stopping_patience = CONFIG["early_stopping_patience"]
     early_stopping_min_delta = CONFIG["early_stopping_min_delta"]
 
-    for epoch in range(CONFIG['epochs']):
+    last_ckpt_path = os.path.join(CONFIG['save_dir'], "last.pth")
+    if CONFIG.get("resume", False) and os.path.exists(last_ckpt_path):
+        print(f"🔄 Resuming from {last_ckpt_path}...")
+        checkpoint = torch.load(last_ckpt_path, map_location=CONFIG['device'])
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        start_epoch = checkpoint['epoch'] + 1
+        best_iou = checkpoint['best_iou']
+        no_improve_epochs = checkpoint['no_improve_epochs']
+        
+        if os.path.exists(log_path):
+            training_logs = pd.read_csv(log_path).to_dict('records')
+
+    for epoch in range(start_epoch, CONFIG['epochs']):
         # ================= Train Phase =================
         model.train() 
         train_loss = 0
@@ -312,6 +328,16 @@ def main():
                 f"Best mIoU: {best_iou:.4f}"
             )
             break
+
+        # 儲存 last.pth 以供中斷接續
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
+            'best_iou': best_iou,
+            'no_improve_epochs': no_improve_epochs
+        }, last_ckpt_path)
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,7 @@
+# PseudoLabel outputs
+outputs/
+logs/
+inputs/*.jpg
+inputs/*.png
+__pycache__/
+*.pyc
