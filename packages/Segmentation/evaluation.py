@@ -22,14 +22,14 @@ CONFIG = {
     "model_name": "facebook/dinov3-vitl16-pretrain-lvd1689m", 
     "img_size": 2400,            
     "patch_size": 16,
-    "num_classes": 8, 
-    "extract_layers": [23],      
-    
-    # --- 路徑設定 (請確認 checkpoint 檔名是否正確) ---
-    "checkpoint_path": "./training_result/7classes_vitl_layer-23-LandR_v1/best.pth", # 修正了可能的檔名錯誤
-    "test_image_dir": "./Datasets/test_dataset/images/",
-    "test_mask_dir": "./Datasets/test_dataset/masks/",
-    "output_dir": "./Evaluation/7classes_vitl_layer-23-LandR_v1"
+    "num_classes": 8,
+    "extract_layers": [-1],      # MUST match fine-tuning.py (last layer)
+
+    # --- Table 6: plain DINOv3 (ablation) on the held-out eval-dataset ---
+    "checkpoint_path": "./training_result/Finalexp_v1/best_finetune_LandR.pth",
+    "test_image_dir": "./Datasets/eval-dataset/images/",
+    "test_mask_dir": "./Datasets/eval-dataset/masks/",
+    "output_dir": "./Evaluation/Finalexp_v1_eval-dataset"
 }
 
 CLASS_COLORS = {
@@ -244,7 +244,16 @@ def main():
 
     final_res = global_evaluator.compute_metrics()
     global_evaluator.plot_confusion_matrix(os.path.join(CONFIG["output_dir"], "confusion_matrix.png"))
-    
+
+    # Raw confusion matrix (rows=True, cols=Pred) — exact L/R off-diagonal for the paper
+    cm_path = os.path.join(CONFIG["output_dir"], "confusion_matrix.csv")
+    with open(cm_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["True\\Pred"] + CLASS_NAMES)
+        for i, name in enumerate(CLASS_NAMES):
+            w.writerow([name] + [int(x) for x in global_evaluator.total_conf_matrix[i]])
+    print(f"Confusion matrix (counts) saved to {cm_path}")
+
     with open(os.path.join(CONFIG["output_dir"], "summary.json"), "w") as f:
         json.dump(final_res, f, indent=4)
         

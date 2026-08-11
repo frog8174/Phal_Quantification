@@ -1,8 +1,12 @@
 """
-Programmatically modify ColorQuantify.ipynb:
-1. Cell 03: Add Kneedle algorithm for objective K selection
-2. Cell 04: Change FINAL_K = 8 -> 5 (or auto from Kneedle)
-3. Add new Cell: Donut Chart generation
+[EXECUTED - 2026/06/05] One-time patch script, no longer needed.
+
+Programmatically modified ColorQuantify.ipynb:
+1. Cell 03: Added Kneedle algorithm for objective K selection
+2. Cell 04: Changed FINAL_K = 8 -> Kneedle-detected value
+3. Added new Cell: Donut Chart generation
+
+This script has already been run successfully. Kept for reference only.
 """
 
 import json

@@ -17,7 +17,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 PIGMENT_DIR = BASE_DIR / "Pigment"
 CENTERS_RGB_PATH = PIGMENT_DIR / "global_centers_rgb.npy"
-FEATURES_CSV_PATH = PIGMENT_DIR / "04_quantified_features.csv"
+FEATURES_CSV_PATH = PIGMENT_DIR / "04_quantified_features_full.csv"  # full 189-flower set
 
 # ── Load data ──────────────────────────────────────────
 centers_rgb = np.load(CENTERS_RGB_PATH)  # shape: (K, 3), dtype uint8
@@ -125,7 +125,24 @@ else:
         return -np.sum(r * np.log2(r))
 
     df["diversity"] = df[ratio_cols].apply(shannon_entropy, axis=1)
-    top_samples = df.nlargest(12, "diversity")
+
+    # Curated set spanning monochromatic → multimodal so the figure matches the §4.4.3 text
+    # (0137 pink, 0085 yellow, 0184 magenta, 0170 dark-purple = near-single-colour;
+    #  0035/0008/0091/0179/0032/0088 = spotted/blended). Falls back to top-diversity if absent.
+    CURATED = ["0137_petal_cutout", "0085_petal_cutout", "0184_petal_cutout", "0170_petal_cutout",
+               "0014_petal_cutout", "0044_petal_cutout", "0008_petal_cutout", "0035_petal_cutout",
+               "0091_petal_cutout", "0179_petal_cutout", "0032_petal_cutout", "0088_petal_cutout"]
+    present = [s for s in CURATED if s in set(df["Sample_ID"])]
+    if len(present) >= 8:
+        top_samples = df.set_index("Sample_ID").loc[present].reset_index()
+    else:
+        top_samples = df.nlargest(12, "diversity")
+
+    # Order the panels monochromatic → multimodal by dominant-bin share, so the
+    # grid itself reads as a gradient and the selection is transparently spanning
+    # (these 12 cover the full 26.3–98.4% range observed across all 189 flowers).
+    top_samples["dominant"] = top_samples[ratio_cols].max(axis=1)
+    top_samples = top_samples.sort_values("dominant", ascending=False).reset_index(drop=True)
 
     n_cols = 4
     n_rows = 3
@@ -172,17 +189,30 @@ else:
             ax.add_artist(centre)
 
         short_name = sample_id.replace("_petal_cutout", "")
-        ax.set_title(short_name, fontsize=10, pad=5)
+        ax.set_title(f"{short_name}\ndominant {row['dominant']*100:.0f}%",
+                     fontsize=10.5, pad=5, linespacing=1.35)
 
     # Hide unused axes
     for j in range(i + 1, len(axes)):
         axes[j].set_visible(False)
 
+    # Shared colour legend (bin index + name) for all donuts
+    BIN_NAMES = ["Brown", "Pale yellow", "Pink", "Golden olive", "Magenta", "Dark red-purple"]
+    if K != len(BIN_NAMES):
+        BIN_NAMES = [f"Bin {i}" for i in range(K)]
+    legend_handles = [
+        mpatches.Patch(facecolor=colors[i], edgecolor="#666", linewidth=0.6,
+                       label=f"Bin {i} — {BIN_NAMES[i]}")
+        for i in range(K)
+    ]
+    fig.legend(handles=legend_handles, loc="lower center", ncol=K,
+               frameon=False, fontsize=12, bbox_to_anchor=(0.5, 0.005))
+
     fig.suptitle(
-        f"Per-Sample Pigment Profiles (Top 12 by Diversity, K = {K})",
+        f"Representative Per-Sample Pigment Profiles (K = {K})",
         fontsize=16, fontweight="bold", y=1.01
     )
-    fig.tight_layout()
+    fig.tight_layout(rect=[0, 0.04, 1, 1])
     out_path_grid = PIGMENT_DIR / "07_per_sample_donut_grid.png"
     fig.savefig(out_path_grid, dpi=300, bbox_inches="tight")
     plt.close(fig)

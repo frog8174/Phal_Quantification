@@ -15,10 +15,16 @@ __pycache__/
 .ruff_cache/
 scratch/
 .gemini/
+.claude/
+.agents/
+PaperWriting/
+skills/
+
 
 # --- OS Files ---
 .DS_Store
 Thumbs.db
+@eaDir/
 
 # --- Logs ---
 *.log
@@ -36,3 +42,5 @@ models/
 *.jpg
 *.JPG
 *.png
+
+PaperWriting

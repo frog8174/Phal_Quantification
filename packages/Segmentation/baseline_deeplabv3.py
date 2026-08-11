@@ -1,10 +1,10 @@
 """
 Baseline comparison: DeepLabV3 (ResNet-50, ImageNet pretrained)
-vs DINOv3 ViT-L for 8-class organ segmentation on the same 12 images.
+vs DINOv3 ViT-L / CoordConv-X for 8-class organ segmentation.
 
-Purpose: Ablation study to demonstrate VFM backbone value.
-  - Same dataset, same augmentation, same loss, same evaluation
-  - Only difference: backbone (ResNet-50 supervised vs DINOv3 self-supervised)
+Table 6 setup: train on v2_dataset_split (20/4), test on eval-dataset (9, held-out).
+  - Same dataset split, same augmentation (HFlip removed), same loss, same evaluation
+  - Difference vs proposed: backbone (ResNet-50 supervised vs DINOv3 self-supervised)
 """
 
 import os
@@ -24,12 +24,12 @@ import pandas as pd
 # ==========================================
 CONFIG = {
     "device": "cuda:2" if torch.cuda.is_available() else "cpu",
-    "dataset_dir": "./Datasets/dataset_cropped_19_5classes_LandR",
-    "save_dir": "./training_result/baseline_deeplabv3_resnet50",
+    "dataset_dir": "./Datasets/v2_dataset_split",
+    "save_dir": "./training_result/Finalexp_baseline_deeplabv3_v1",
     "model_name": "DeepLabV3-ResNet50 (ImageNet pretrained)",
     "img_size": 2400,        # same resolution as DINOv3 experiment
     "num_classes": 8,
-    "epochs": 200,
+    "epochs": 100,
     "batch_size": 2,
     "lr": 1e-4,              # single LR (no differential — standard practice for DeepLab)
     "lr_backbone": 1e-5,     # fine-tune backbone at lower LR
@@ -60,7 +60,8 @@ class SegmentationDataset(Dataset):
         if is_train:
             self.transforms = v2.Compose([
                 v2.Resize((img_size, img_size), interpolation=v2.InterpolationMode.BICUBIC),
-                v2.RandomHorizontalFlip(p=0.5),
+                # NOTE: HorizontalFlip removed — it moves L/R petals without swapping labels 6/7,
+                #       corrupting the L/R signal. Matches fine-tuning.py / CoordConv for a fair comparison.
                 v2.RandomRotation(degrees=15),
                 v2.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.03),
                 v2.RandomApply([v2.GaussianBlur(kernel_size=3, sigma=(0.1, 1.2))], p=0.2),
@@ -70,7 +71,8 @@ class SegmentationDataset(Dataset):
             ])
             self.mask_transforms = v2.Compose([
                 v2.Resize((img_size, img_size), interpolation=v2.InterpolationMode.NEAREST),
-                v2.RandomHorizontalFlip(p=0.5),
+                # NOTE: HorizontalFlip removed — it moves L/R petals without swapping labels 6/7,
+                #       corrupting the L/R signal. Matches fine-tuning.py / CoordConv for a fair comparison.
                 v2.RandomRotation(degrees=15),
                 v2.ToImage(),
                 v2.ToDtype(torch.long, scale=False),

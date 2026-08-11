@@ -5,19 +5,19 @@
       "source": "Imbad0202/academic-research-skills",
       "sourceType": "github",
       "skillPath": "academic-paper/SKILL.md",
-      "computedHash": "f79fa40c8565a668f58bab6408cb12111f15a886ca74e472c25f32a64c779baa"
+      "computedHash": "53c1add1030e5d21422ee04a8ee9b1c85fa0553c6414012442887dadef8bed24"
     },
     "academic-paper-reviewer": {
       "source": "Imbad0202/academic-research-skills",
       "sourceType": "github",
       "skillPath": "academic-paper-reviewer/SKILL.md",
-      "computedHash": "e17e1c38f094e7f076a5c59339f1946315c4c26513bad8bc3c1e244687914e36"
+      "computedHash": "6940aa353c2ad3ff52082a33487e4a98fd6813aed6d25929f4f82a499c21b9fd"
     },
     "academic-pipeline": {
       "source": "Imbad0202/academic-research-skills",
       "sourceType": "github",
       "skillPath": "academic-pipeline/SKILL.md",
-      "computedHash": "c69fe30231ebef317db08d37b45d6e64e9f94021c94552c35b9d89a2871ae387"
+      "computedHash": "285f6e544afb332323708990cef62e7a6f64e0b44578ad9422d503f1172362db"
     },
     "brandkit": {
       "source": "Leonxlnx/taste-skill",
@@ -29,7 +29,7 @@
       "source": "Imbad0202/academic-research-skills",
       "sourceType": "github",
       "skillPath": "deep-research/SKILL.md",
-      "computedHash": "13f083d288c7e280d576d37f158a3c04ea3e0b325071d35761d8bcd75ab409da"
+      "computedHash": "7889e9f4f80b7c2681df957e25de8077b593a2fc42c600c878ddf163e0c7fad9"
     },
     "design-taste-frontend": {
       "source": "Leonxlnx/taste-skill",
@@ -102,6 +102,12 @@
       "sourceType": "github",
       "skillPath": "skills/stitch-skill/SKILL.md",
       "computedHash": "c96b580192b34167efa01f460bbc669ff4315cf97f3cf6ff85ded8029aa720b8"
+    },
+    "writing-plans": {
+      "source": "obra/superpowers",
+      "sourceType": "github",
+      "skillPath": "skills/writing-plans/SKILL.md",
+      "computedHash": "2b986445454a025ca2c3839f8a2024747e8cce0517948437232cd113d2719060"
     }
   }
 }

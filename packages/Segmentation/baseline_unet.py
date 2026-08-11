@@ -8,8 +8,11 @@ Purpose: Ablation study to demonstrate VFM backbone value against a standard, wi
 import os
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+import torch.utils.checkpoint
 from torch.utils.data import Dataset, DataLoader
 from torchvision.transforms import v2
+from torchvision.models import resnet34, ResNet34_Weights
 from PIL import Image
 import numpy as np
 from tqdm import tqdm
@@ -19,17 +22,19 @@ import pandas as pd
 # 1. Config
 # ==========================================
 CONFIG = {
-    "device": "cuda:1" if torch.cuda.is_available() else "cpu",
+    "device": "cuda:2" if torch.cuda.is_available() else "cpu",
     "dataset_dir": "./Datasets/v2_dataset_split",
-    "save_dir": "./training_result/baseline_unet",
-    "model_name": "U-Net-lr2e-4 (Trained from scratch)",
+    "save_dir": "./training_result/Finalexp_baseline_unet_resnet34_v1",
+    "model_name": "U-Net (ResNet-34 encoder, ImageNet pretrained)",
     "img_size": 2400,        # same resolution as DINOv3 experiment
     "num_classes": 8,
-    "epochs": 200,
+    "epochs": 100,
     "batch_size": 2,
-    "lr": 2e-4,              # standard U-Net LR
+    # Differential LR: gentle on the pretrained ResNet-34 encoder, higher on the random decoder
+    "lr_backbone": 1e-5,
+    "lr_head": 5e-4,
     "num_workers": 1,
-    "early_stopping_patience": 200,
+    "early_stopping_patience": 25,
     "early_stopping_min_delta": 5e-4,
     "use_checkpointing": True, # Required for 2400x2400 resolution
     "resume": False
@@ -56,7 +61,8 @@ class SegmentationDataset(Dataset):
         if is_train:
             self.transforms = v2.Compose([
                 v2.Resize((img_size, img_size), interpolation=v2.InterpolationMode.BICUBIC),
-                v2.RandomHorizontalFlip(p=0.5),
+                # NOTE: HorizontalFlip removed — it moves L/R petals without swapping labels 6/7,
+                #       corrupting the L/R signal. Matches fine-tuning.py / CoordConv for a fair comparison.
                 v2.RandomRotation(degrees=15),
                 v2.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.03),
                 v2.RandomApply([v2.GaussianBlur(kernel_size=3, sigma=(0.1, 1.2))], p=0.2),
@@ -66,7 +72,8 @@ class SegmentationDataset(Dataset):
             ])
             self.mask_transforms = v2.Compose([
                 v2.Resize((img_size, img_size), interpolation=v2.InterpolationMode.NEAREST),
-                v2.RandomHorizontalFlip(p=0.5),
+                # NOTE: HorizontalFlip removed — it moves L/R petals without swapping labels 6/7,
+                #       corrupting the L/R signal. Matches fine-tuning.py / CoordConv for a fair comparison.
                 v2.RandomRotation(degrees=15),
                 v2.ToImage(),
                 v2.ToDtype(torch.long, scale=False),
@@ -102,7 +109,8 @@ class SegmentationDataset(Dataset):
 
 
 # ==========================================
-# 3. Model — Standard U-Net (From Scratch)
+# 3. Model — U-Net with ImageNet-pretrained ResNet-34 encoder
+#    (fair "conventional pretrained CNN" baseline vs the DINOv3 VFM)
 # ==========================================
 class DoubleConv(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -118,63 +126,58 @@ class DoubleConv(nn.Module):
     def forward(self, x):
         return self.conv(x)
 
-class UNetBaseline(nn.Module):
-    def __init__(self, in_channels=3, num_classes=8, use_checkpointing=True):
+class ResNetUNet(nn.Module):
+    """U-Net decoder on an ImageNet-pretrained ResNet-34 encoder.
+    Output logits are decoded to 1/2 resolution then bilinearly upsampled to the
+    input size (keeps 2400x2400 memory tractable; gradient checkpointing on all stages)."""
+
+    def __init__(self, in_channels=3, num_classes=8, pretrained=True, use_checkpointing=True):
         super().__init__()
         self.use_checkpointing = use_checkpointing
-        
-        # Encoder
-        self.down1 = DoubleConv(in_channels, 64)
-        self.pool1 = nn.MaxPool2d(2)
-        self.down2 = DoubleConv(64, 128)
-        self.pool2 = nn.MaxPool2d(2)
-        self.down3 = DoubleConv(128, 256)
-        self.pool3 = nn.MaxPool2d(2)
-        self.down4 = DoubleConv(256, 512)
-        self.pool4 = nn.MaxPool2d(2)
-        
-        # Bottleneck
-        self.bottleneck = DoubleConv(512, 1024)
-        
-        # Decoder
-        self.up4 = nn.ConvTranspose2d(1024, 512, kernel_size=2, stride=2)
-        self.up_conv4 = DoubleConv(1024, 512)
-        self.up3 = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2)
-        self.up_conv3 = DoubleConv(512, 256)
-        self.up2 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
-        self.up_conv2 = DoubleConv(256, 128)
-        self.up1 = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2)
-        self.up_conv1 = DoubleConv(128, 64)
-        
+        weights = ResNet34_Weights.IMAGENET1K_V1 if pretrained else None
+        base = resnet34(weights=weights)
+
+        # --- Encoder (ResNet-34 stages) ---
+        self.input_block = nn.Sequential(base.conv1, base.bn1, base.relu)  # 1/2,  64ch
+        self.maxpool = base.maxpool                                        # 1/4
+        self.layer1 = base.layer1   # 1/4,  64ch
+        self.layer2 = base.layer2   # 1/8,  128ch
+        self.layer3 = base.layer3   # 1/16, 256ch
+        self.layer4 = base.layer4   # 1/32, 512ch
+
+        # --- Decoder (transpose-conv up + skip concat + DoubleConv) ---
+        self.up4 = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2)
+        self.dec4 = DoubleConv(256 + 256, 256)
+        self.up3 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
+        self.dec3 = DoubleConv(128 + 128, 128)
+        self.up2 = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2)
+        self.dec2 = DoubleConv(64 + 64, 64)
+        self.up1 = nn.ConvTranspose2d(64, 64, kernel_size=2, stride=2)
+        self.dec1 = DoubleConv(64 + 64, 64)
         self.out_conv = nn.Conv2d(64, num_classes, kernel_size=1)
 
     def forward(self, x):
-        # 為了在高解析度下節省 VRAM，使用 Gradient Checkpointing
-        def cp(module, x):
-            if self.use_checkpointing and x.requires_grad:
-                return torch.utils.checkpoint.checkpoint(module, x, use_reentrant=False)
-            return module(x)
-            
-        x1 = cp(self.down1, x)
-        x2 = cp(self.down2, self.pool1(x1))
-        x3 = cp(self.down3, self.pool2(x2))
-        x4 = cp(self.down4, self.pool3(x3))
-        
-        x5 = cp(self.bottleneck, self.pool4(x4))
-        
-        x = self.up4(x5)
-        x = cp(self.up_conv4, torch.cat([x, x4], dim=1))
-        
-        x = self.up3(x)
-        x = cp(self.up_conv3, torch.cat([x, x3], dim=1))
-        
-        x = self.up2(x)
-        x = cp(self.up_conv2, torch.cat([x, x2], dim=1))
-        
-        x = self.up1(x)
-        x = cp(self.up_conv1, torch.cat([x, x1], dim=1))
-        
-        return self.out_conv(x)
+        H, W = x.shape[-2:]
+
+        def cp(module, *inp):
+            if self.use_checkpointing and self.training:
+                return torch.utils.checkpoint.checkpoint(module, *inp, use_reentrant=False)
+            return module(*inp)
+
+        s0 = cp(self.input_block, x)   # 1/2,  64
+        p = self.maxpool(s0)           # 1/4
+        s1 = cp(self.layer1, p)        # 1/4,  64
+        s2 = cp(self.layer2, s1)       # 1/8,  128
+        s3 = cp(self.layer3, s2)       # 1/16, 256
+        b = cp(self.layer4, s3)        # 1/32, 512
+
+        d4 = cp(self.dec4, torch.cat([self.up4(b), s3], dim=1))    # 1/16, 256
+        d3 = cp(self.dec3, torch.cat([self.up3(d4), s2], dim=1))   # 1/8,  128
+        d2 = cp(self.dec2, torch.cat([self.up2(d3), s1], dim=1))   # 1/4,  64
+        d1 = cp(self.dec1, torch.cat([self.up1(d2), s0], dim=1))   # 1/2,  64
+
+        logits = self.out_conv(d1)                                 # 1/2
+        return F.interpolate(logits, size=(H, W), mode="bilinear", align_corners=False)
 
 
 # ==========================================
@@ -213,11 +216,17 @@ def main():
 
     print(f"Train: {len(train_dataset)} images, Val: {len(val_dataset)} images")
 
-    model = UNetBaseline(num_classes=CONFIG["num_classes"], use_checkpointing=CONFIG["use_checkpointing"]).to(CONFIG["device"])
+    model = ResNetUNet(num_classes=CONFIG["num_classes"], pretrained=True, use_checkpointing=CONFIG["use_checkpointing"]).to(CONFIG["device"])
     print(f"Model: {CONFIG['model_name']}")
 
-    # U-Net trains from scratch, so single learning rate is used.
-    optimizer = torch.optim.AdamW(model.parameters(), lr=CONFIG["lr"], weight_decay=0.01)
+    # Differential LR: pretrained ResNet-34 encoder low, decoder high (mirrors DeepLabV3 baseline).
+    encoder_prefixes = ("input_block", "maxpool", "layer1", "layer2", "layer3", "layer4")
+    encoder_params = [p for n, p in model.named_parameters() if n.startswith(encoder_prefixes)]
+    decoder_params = [p for n, p in model.named_parameters() if not n.startswith(encoder_prefixes)]
+    optimizer = torch.optim.AdamW([
+        {"params": encoder_params, "lr": CONFIG["lr_backbone"]},
+        {"params": decoder_params, "lr": CONFIG["lr_head"]},
+    ], weight_decay=0.01)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=CONFIG["epochs"])
     criterion = nn.CrossEntropyLoss()
 
@@ -277,7 +286,8 @@ def main():
         avg_val_loss = val_loss / len(val_loader)
         avg_val_iou = val_iou / len(val_loader)
 
-        current_lr = optimizer.param_groups[0]["lr"]
+        current_lr_backbone = optimizer.param_groups[0]["lr"]
+        current_lr_head = optimizer.param_groups[1]["lr"]
 
         print(
             f"Epoch [{epoch + 1}/{CONFIG['epochs']}] - "
@@ -290,8 +300,8 @@ def main():
             "train_loss": avg_train_loss,
             "val_loss": avg_val_loss,
             "val_miou": avg_val_iou,
-            "lr_backbone": current_lr, # unified LR
-            "lr_head": current_lr,     # unified LR
+            "lr_backbone": current_lr_backbone,
+            "lr_head": current_lr_head,
             "best_miou": max(best_iou, avg_val_iou),
         }
         training_logs.append(log_entry)

@@ -17,19 +17,19 @@ PROJECT_LOC = 'end2end_5classes'
 CONFIG = {
     "device": "cuda:3" if torch.cuda.is_available() else "cpu",
     "dataset_dir": f"./Datasets/v2_dataset_split",
-    "save_dir": f"./training_result/Finalexp_lastlayer_lr2e-4_v1",
+    "save_dir": f"./training_result/Finalexp_v1",
     "model_name": "facebook/dinov3-vitl16-pretrain-lvd1689m",
     # "local_weights_path": "../models/pretrain/vit-l_97499.pth", # 你的本地權重路徑
     "local_weights_path": None,
     "img_size": 2400, 
     "patch_size": 16,
     "num_classes": 8,
-    "epochs": 200,    
+    "epochs": 100,    
     "batch_size": 2,  
     "lr_head": 0.0002,  
     "lr_backbone": 0.000005, 
     "num_workers": 1,
-    "early_stopping_patience": 200,
+    "early_stopping_patience": 25,
     "early_stopping_min_delta": 5e-4,
     
     "extract_layers": [-1], # len(feats)=24
@@ -61,7 +61,7 @@ class SegmentationDataset(Dataset):
         if is_train:
             self.transforms = v2.Compose([
                 v2.Resize((img_size, img_size), interpolation=v2.InterpolationMode.BICUBIC),
-                v2.RandomHorizontalFlip(p=0.5),
+                # NOTE: HorizontalFlip 移除 — 會把左右花瓣搬位卻不換 6/7 標籤，破壞 L/R 訊號
                 v2.RandomRotation(degrees=15),
                 v2.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.03),
                 v2.RandomApply([v2.GaussianBlur(kernel_size=3, sigma=(0.1, 1.2))], p=0.2),
@@ -71,7 +71,7 @@ class SegmentationDataset(Dataset):
             ])
             self.mask_transforms = v2.Compose([
                 v2.Resize((img_size, img_size), interpolation=v2.InterpolationMode.NEAREST),
-                v2.RandomHorizontalFlip(p=0.5), 
+                # NOTE: HorizontalFlip 移除 — 同上，避免左右花瓣標籤矛盾
                 v2.RandomRotation(degrees=15),
                 v2.ToImage(),
                 v2.ToDtype(torch.long, scale=False)

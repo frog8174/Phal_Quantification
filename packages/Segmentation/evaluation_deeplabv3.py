@@ -27,11 +27,11 @@ CONFIG = {
     "num_classes": 8,
     "img_size": 2400,
 
-    # --- Paths (adjust to your actual checkpoint) ---
-    "checkpoint_path": "./training_result/baseline_deeplabv3_resnet50/best.pth",
-    "test_image_dir": "./Datasets/test_dataset/images/",
-    "test_mask_dir": "./Datasets/test_dataset/masks/",
-    "output_dir": "./Evaluation/baseline_deeplabv3_resnet50",
+    # --- Table 6: DeepLabV3 baseline on the held-out eval-dataset ---
+    "checkpoint_path": "./training_result/Finalexp_baseline_deeplabv3_v1/best.pth",
+    "test_image_dir": "./Datasets/eval-dataset/images/",
+    "test_mask_dir": "./Datasets/eval-dataset/masks/",
+    "output_dir": "./Evaluation/baseline_deeplabv3_eval-dataset",
 }
 
 CLASS_COLORS = {
@@ -257,6 +257,15 @@ def main():
     final_res["trainable_params"] = trainable_params
 
     global_evaluator.plot_confusion_matrix(os.path.join(CONFIG["output_dir"], "confusion_matrix.png"))
+
+    # Raw confusion matrix (rows=True, cols=Pred) — exact L/R off-diagonal for the paper
+    cm_path = os.path.join(CONFIG["output_dir"], "confusion_matrix.csv")
+    with open(cm_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["True\\Pred"] + CLASS_NAMES)
+        for i, name in enumerate(CLASS_NAMES):
+            w.writerow([name] + [int(x) for x in global_evaluator.total_conf_matrix[i]])
+    print(f"Confusion matrix (counts) saved to {cm_path}")
 
     with open(os.path.join(CONFIG["output_dir"], "summary.json"), "w") as f:
         json.dump(final_res, f, indent=4)
